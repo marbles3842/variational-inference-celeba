@@ -1,0 +1,12 @@
+ivon:
+  learning_rate: 0.1
+  num_epochs: 50
+  batch_size: 64
+  weight_decay: 1.0e-5
+  clip_radius: 1.0e-3
+  ess: 202599.0
+  hess_init: 0.5
+  diffusion_timesteps: 1000
+  train_mc_samples: 1
+  rescale_lr: True
+  semantic_likelihood_noise: 0.001

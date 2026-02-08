@@ -1,0 +1,9 @@
+--find-links https://storage.googleapis.com/jax-releases/libtpu_releases.html
+jax[tpu]
+flax
+optax
+clu
+pyyaml
+datasets
+Pillow
+grain

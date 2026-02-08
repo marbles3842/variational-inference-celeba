@@ -1,0 +1,209 @@
+from typing import Tuple, Callable, Any
+
+import optax
+import jax
+import jax.numpy as jnp
+import jax.random as jr
+from jax.lax import scan, cond
+import flax.linen as nn
+from flax.core import FrozenDict
+from flax.struct import dataclass, field
+from flax.training.train_state import TrainState
+
+from core.ivon import make_monte_carlo_grad
+
+
+Dtype = Any
+
+
+def _linear_beta_schedule(
+    timesteps: int,
+    beta_start: float = 1e-4,
+    beta_end: float = 2e-2,
+    dtype: Dtype = jnp.float32,
+):
+    return jnp.linspace(beta_start, beta_end, timesteps, dtype=dtype)
+
+
+@dataclass
+class DiffusionModelSchedule:
+    beta: jax.Array
+    alpha: jax.Array
+    alpha_cumprod: jax.Array
+    timesteps: int = field(pytree_node=False)
+
+    @classmethod
+    def create(cls, timesteps: int, dtype: Dtype = jnp.float32):
+        beta = _linear_beta_schedule(timesteps=timesteps, dtype=dtype)
+        alpha = 1.0 - beta
+        alpha_cumprod = jnp.cumprod(alpha)
+        return cls(
+            beta=beta,
+            alpha=alpha,
+            alpha_cumprod=alpha_cumprod,
+            timesteps=timesteps,
+        )
+
+
+def _negative_elbo(
+    batch: jax.Array,
+    params: FrozenDict,
+    apply_fn: Callable,
+    schedule: DiffusionModelSchedule,
+    key_t: jr.PRNGKey,
+    key_eps: jr.PRNGKey,
+):
+
+    batch_size = batch.shape[0]
+    t = jr.randint(key=key_t, minval=0, maxval=schedule.timesteps, shape=(batch_size,))
+    epsilon = jr.normal(key_eps, shape=batch.shape)
+
+    alpha_bar_t = (
+        schedule.alpha_cumprod[t]
+        .reshape(batch_size, 1, 1, 1)
+    )
+    x_t = jnp.sqrt(alpha_bar_t) * batch + jnp.sqrt(1 - alpha_bar_t) * epsilon
+    variables = {"params": params}
+    epsilon_theta = apply_fn(variables, x_t, t)
+    loss = (epsilon_theta - epsilon) ** 2
+
+    loss_weights = (1 - schedule.alpha_cumprod[t]).reshape(batch_size, 1, 1, 1)
+
+    loss = loss * loss_weights
+    return loss.mean()
+
+
+@jax.jit
+def diffusion_train_step(
+    state: TrainState,
+    batch: jax.Array,
+    key: jr.PRNGKey,
+    schedule: DiffusionModelSchedule,
+):
+    """
+    Base training step that can be used with Adam or SGD
+    Implements algorithm 1 from https://arxiv.org/pdf/2006.11239
+    """
+    key_t, key_eps, key = jr.split(key, num=3)
+
+    def loss(params, key_t, key_eps):
+        return _negative_elbo(
+            batch=batch,
+            params=params,
+            apply_fn=state.apply_fn,
+            schedule=schedule,
+            key_t=key_t,
+            key_eps=key_eps,
+        )
+
+    loss, grads = jax.value_and_grad(loss)(state.params, key_t, key_eps)
+    new_state = state.apply_gradients(grads=grads)
+    metric_update = new_state.metrics.single_from_model_output(loss=loss)
+    metrics = new_state.metrics.merge(metric_update)
+    return new_state.replace(metrics=metrics), key
+
+
+@jax.jit
+def _compute_hessian_metrics(hessian):
+    all_hess_values = jnp.concatenate([jnp.ravel(h) for h in jax.tree.leaves(hessian)])
+    return jnp.mean(all_hess_values), jnp.min(all_hess_values)
+
+
+@jax.jit
+def diffusion_train_step_with_ivon(
+    state: TrainState,
+    batch: jax.Array,
+    train_key: jr.PRNGKey,
+    schedule: DiffusionModelSchedule,
+    mc_keys: jax.Array,
+):
+    """
+    Training step with MC sampling for IVON
+    Implements algorithm 1 from https://arxiv.org/pdf/2006.11239
+    """
+
+    def loss(params, data):
+        batch, key_t, key_eps = data
+        return _negative_elbo(
+            batch=batch,
+            params=params,
+            apply_fn=state.apply_fn,
+            schedule=schedule,
+            key_t=key_t,
+            key_eps=key_eps,
+        )
+
+    train_key, main_key, key_t, key_eps = jr.split(train_key, num=4)
+    # TODO: remove mckeys!
+
+    grad_fn = make_monte_carlo_grad(loss_fn=loss, num_samples=1)
+    loss, grads, opt_state = grad_fn(
+        key=main_key,
+        params=state.params,
+        opt_state=state.opt_state[0],
+        data=(batch, key_t, key_eps),
+    )
+    full_opt_state = (opt_state,) + state.opt_state[1:]
+
+    updates, opt_state = state.tx.update(grads, full_opt_state, state.params)
+    new_params = optax.apply_updates(state.params, updates)
+    new_state = state.replace(params=new_params, opt_state=opt_state)
+
+    hess_mean, hess_min = _compute_hessian_metrics(opt_state[0].hessian)
+    metric_update = new_state.metrics.single_from_model_output(
+        loss=loss, hess_mean=hess_mean, hess_min=hess_min
+    )
+    metrics = new_state.metrics.merge(metric_update)
+    return new_state.replace(metrics=metrics), train_key
+
+
+def diffusion_sample(
+    model: nn.Module,
+    variables: FrozenDict,
+    shape: Tuple,
+    key: jr.PRNGKey,
+    schedule: DiffusionModelSchedule,
+    dtype: Dtype = jnp.float32,
+):
+    batch_size = shape[0]
+
+    key, subkey = jr.split(key)
+
+    x_t = jr.normal(key=subkey, shape=shape, dtype=dtype)
+    variables_compute = variables
+
+    def reverse_step(carry, t):
+        x_t, key = carry
+
+        t_arr = jnp.full((batch_size,), t, dtype=dtype)
+        key, subkey = jr.split(key)
+
+        z = cond(
+            t > 0,
+            lambda _: jr.normal(key=subkey, shape=shape, dtype=dtype),
+            lambda _: jnp.zeros(shape, dtype=dtype),
+            None,
+        )
+
+        x_t_compute, t_arr_compute = x_t, t_arr
+        predicted_noise = model.apply(variables_compute, x_t_compute, t_arr_compute)
+
+        alpha_t = schedule.alpha[t]
+        alpha_t_bar = schedule.alpha_cumprod[t]
+        beta_t = schedule.beta[t]
+
+        x_t = (
+            1
+            / jnp.sqrt(alpha_t)
+            * (x_t - predicted_noise * (1 - alpha_t) / jnp.sqrt(1 - alpha_t_bar))
+        )
+
+        sigma_t = jnp.sqrt(beta_t)
+        x_t = x_t + sigma_t * z
+        return (x_t, key), None
+
+    (x_t, key), _ = scan(
+        reverse_step, (x_t, key), jnp.arange(schedule.timesteps - 1, -1, -1)
+    )
+
+    return x_t
