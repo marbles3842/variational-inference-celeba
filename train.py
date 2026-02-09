@@ -13,12 +13,12 @@ from trainer.ddpm_trainer import (
 )
 from model.unet import Unet_CelebA
 from trainer.diffusion_train_state import create_train_state
-from logger import MetricsLogger
+from logger.metrics_logger import MetricsLogger
 
 from core.ivon import ivon
 from core.serialization import save_params
 
-from .utils import load_diffusion_ivon_config
+from utils import load_diffusion_ivon_config
 
 from orbax.checkpoint import v1 as ocp
 from etils import epath
@@ -119,9 +119,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    ivon_config = load_diffusion_ivon_config(
-        filename="celeba_diffusion_train_config.yaml"
-    )
+    ivon_config = load_diffusion_ivon_config()
 
     devices = jax.devices()
 
@@ -146,7 +144,7 @@ if __name__ == "__main__":
         learning_rate=ivon_config["learning_rate"],
         weight_decay=ivon_config["weight_decay"],
         ess=ivon_config["ess"],
-        hess_init=ivon_config["hess_init"],
+        hessian_init=ivon_config["hess_init"],
         clip_radius=ivon_config["clip_radius"],
         rescale_lr=ivon_config["rescale_lr"],
     )
