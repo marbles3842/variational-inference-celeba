@@ -8,22 +8,21 @@ from jax.tree_util import tree_map, tree_unflatten, tree_structure
 from jax import vmap
 from jax.lax import rsqrt, square
 
-from typing import NamedTuple
+from typing import NamedTuple, Callable
 
 
-class _State(NamedTuple):
+class IvonState(NamedTuple):
     current_step: int
     weight_decay: float
     beta1: float
     beta2: float
-    hessian_init: float
     ess: float
     avg_nxg: optax.Updates
     momentum: optax.Updates
     hessian: optax.Updates
 
 
-def _sample_normal_like(key, target_tree):
+def _sample_normal_like(key: jr.PRNGKey, target_tree):
     treedef = tree_structure(target_tree)
     num_leaves = treedef.num_leaves
     keys = jr.split(key, num_leaves)
@@ -34,16 +33,16 @@ def _sample_normal_like(key, target_tree):
     )
 
 
-def make_monte_carlo_grad(loss_fn, num_samples):
+def make_monte_carlo_grad(loss_fn: Callable, num_samples: int):
 
-    def _single_sample(key, mean, std, data):
+    def _single_sample(key:jr.PRNGKey, mean: optax.Params, std: optax.Updates, data):
         noise = _sample_normal_like(key=key, target_tree=mean)
         theta = tree_map(lambda m, s, eps: m + s * eps, mean, std, noise)
         loss, grad = jax.value_and_grad(loss_fn)(theta, data)
         nxg = tree_map(lambda g, s, eps: g * s * eps, grad, std, noise)
         return loss, grad, nxg
 
-    def grad_fn(key, params, opt_state, data):
+    def grad_fn(key: jr.PRNGKey, params: optax.Params, opt_state: IvonState, data):
         keys = jr.split(key, num_samples)
 
         variance = _compute_variance(opt_state)
@@ -103,17 +102,28 @@ def ivon(
     return optax.chain(*transform_list)
 
 
+def empty_ivon_state(param: optax.Params) -> IvonState:
+    return _init_ivon(
+        params=param,
+        weight_decay=0.0,
+        beta1=0.0,
+        beta2=0.0,
+        hessian_init=0.0,
+        ess=0.0,
+    )
+
+
 def _init_ivon(
-    params,
+    params: optax.Params,
     weight_decay: float,
     beta1: float,
     beta2: float,
     hessian_init: float,
     ess: float,
-) -> _State:
+) -> IvonState:
     momentum = tree_map(jnp.zeros_like, params)
     hessian = tree_map(lambda t: jnp.full_like(t, fill_value=hessian_init), params)
-    return _State(
+    return IvonState(
         current_step=1,
         weight_decay=weight_decay,
         beta1=beta1,
@@ -121,12 +131,11 @@ def _init_ivon(
         ess=ess,
         avg_nxg=tree_map(jnp.zeros_like, params),
         momentum=momentum,
-        hessian=hessian,
-        hessian_init=hessian_init,
+        hessian=hessian
     )
 
 
-def _ivon_update(avg_grads: optax.Updates, state: _State, params=None):
+def _ivon_update(avg_grads: optax.Updates, state: IvonState, params=None):
     state = _update_hessian(state=state)
     state = _update_momentum(avg_grads=avg_grads, state=state)
 
@@ -134,7 +143,7 @@ def _ivon_update(avg_grads: optax.Updates, state: _State, params=None):
     return updates, state._replace(current_step=state.current_step + 1)
 
 
-def _update_hessian(state: _State) -> _State:
+def _update_hessian(state: IvonState) -> IvonState:
     beta2 = state.beta2
     weight_decay = state.weight_decay
     ess = state.ess
@@ -153,7 +162,7 @@ def _update_hessian(state: _State) -> _State:
     return state._replace(hessian=new_hessian)
 
 
-def _update_momentum(avg_grads: optax.Updates, state: _State) -> _State:
+def _update_momentum(avg_grads: optax.Updates, state: IvonState) -> IvonState:
     g = tree_map(
         lambda g, grad: state.beta1 * g + (1 - state.beta1) * grad,
         state.momentum,
@@ -162,7 +171,7 @@ def _update_momentum(avg_grads: optax.Updates, state: _State) -> _State:
     return state._replace(momentum=g)
 
 
-def _compute_updates(params: optax.Updates, state: _State) -> optax.Updates:
+def _compute_updates(params: optax.Updates, state: IvonState) -> optax.Updates:
     g_debias = tree_map(
         lambda g_i: g_i / (1 - state.beta1**state.current_step), state.momentum
     )
@@ -174,7 +183,7 @@ def _compute_updates(params: optax.Updates, state: _State) -> optax.Updates:
     )
 
 
-def _compute_variance(state: _State) -> optax.Updates:
+def _compute_variance(state: IvonState) -> optax.Updates:
     return tree_map(
         lambda h: rsqrt(state.ess * (h + state.weight_decay)), state.hessian
     )
