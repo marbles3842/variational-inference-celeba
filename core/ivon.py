@@ -20,6 +20,8 @@ class IvonState(NamedTuple):
     avg_nxg: optax.Updates
     momentum: optax.Updates
     hessian: optax.Updates
+    hessian_init: float = 1.0 # TODO: to be removed
+
 
 
 def _sample_normal_like(key: jr.PRNGKey, target_tree):
