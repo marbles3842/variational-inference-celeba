@@ -1,4 +1,3 @@
-import itertools
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -56,11 +55,6 @@ def create_mgpu_diffusion_train_step(mesh):
         donate_argnums=(0,),
     )
 
-
-def fast_forward_iterator(iterator, n_steps):
-    if n_steps > 0:
-        print(f"Fast-forwarding dataset by {n_steps} steps...")
-        next(itertools.islice(iterator, n_steps, n_steps), None)
 
 
 if __name__ == "__main__":
@@ -194,7 +188,6 @@ if __name__ == "__main__":
 
                 state = ckptr.load_pytree(abstract_pytree=state)
                 latest_step = latest_info.step
-                fast_forward_iterator(images, latest_step)
             else:
                 latest_step = 0
                 print("No checkpoint found. Starting from scratch.")
