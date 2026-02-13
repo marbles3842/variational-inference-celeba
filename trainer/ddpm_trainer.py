@@ -25,6 +25,22 @@ def _linear_beta_schedule(
     return jnp.linspace(beta_start, beta_end, timesteps, dtype=dtype)
 
 
+def _cosine_beta_schedule(
+    timesteps: int,
+    s: float = 0.008,
+    beta_min: float = 0.0001,
+    beta_max: float = 0.9999,
+    dtype: Dtype = jnp.float32
+):
+    def f(t):
+        return jnp.pow(jnp.cos((t/timesteps + s)/(1+s) * jnp.pi * 0.5), 2)
+    
+    alphas = jnp.linspace(0, timesteps, timesteps+1, dtype=dtype)
+    alphas = f(alphas)/f(0)
+    betas = 1 - (alphas[1:] / alphas[:-1])
+    return jnp.clip(betas, beta_min, beta_max)
+
+
 @dataclass
 class DiffusionModelSchedule:
     beta: jax.Array
@@ -34,7 +50,7 @@ class DiffusionModelSchedule:
 
     @classmethod
     def create(cls, timesteps: int, dtype: Dtype = jnp.float32):
-        beta = _linear_beta_schedule(timesteps=timesteps, dtype=dtype)
+        beta = _cosine_beta_schedule(timesteps=timesteps, dtype=dtype)
         alpha = 1.0 - beta
         alpha_cumprod = jnp.cumprod(alpha)
         return cls(
