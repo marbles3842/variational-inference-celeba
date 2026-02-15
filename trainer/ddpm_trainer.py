@@ -111,7 +111,6 @@ def diffusion_train_step_with_ivon(
     batch: jax.Array,
     train_key: jr.PRNGKey,
     schedule: DiffusionModelSchedule,
-    mc_keys: jax.Array,
 ):
     """
     Training step with MC sampling for IVON
@@ -130,7 +129,6 @@ def diffusion_train_step_with_ivon(
         )
 
     train_key, main_key, key_t, key_eps = jr.split(train_key, num=4)
-    # TODO: remove mckeys!
 
     grad_fn = make_monte_carlo_grad(loss_fn=loss, num_samples=1)
     loss, grads, opt_state = grad_fn(
@@ -166,7 +164,6 @@ def diffusion_sample(
     key, subkey = jr.split(key)
 
     x_t = jr.normal(key=subkey, shape=shape, dtype=dtype)
-    variables_compute = variables
 
     def reverse_step(carry, t):
         x_t, key = carry
@@ -181,8 +178,7 @@ def diffusion_sample(
             None,
         )
 
-        x_t_compute, t_arr_compute = x_t, t_arr
-        predicted_noise = model.apply(variables_compute, x_t_compute, t_arr_compute)
+        predicted_noise = model.apply(variables, x_t, t_arr)
 
         alpha_t = schedule.alpha[t]
         alpha_t_bar = schedule.alpha_cumprod[t]
