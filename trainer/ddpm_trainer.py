@@ -218,4 +218,4 @@ def diffusion_sample(
         reverse_step, (x_t, key), jnp.arange(schedule.timesteps - 1, -1, -1)
     )
 
-    return x_t
+    return (x_t + 1.0) / 2.0

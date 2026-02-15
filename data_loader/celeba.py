@@ -14,7 +14,7 @@ class CelebAInfo:
 class _Normalize(grain.MapTransform):
     def map(self, element):
         img = element.astype(np.float32) / 255.0
-        return img
+        return img * 2.0 - 1.0
 
 
 class _CenterCropAndResize(grain.MapTransform):
