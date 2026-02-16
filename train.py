@@ -50,6 +50,7 @@ def create_mgpu_diffusion_train_step(mesh):
             get_data_sharding(mesh),
             replicated_sharding,
             replicated_sharding,
+            replicated_sharding
         ),
         out_shardings=(state_sharding, replicated_sharding),
         donate_argnums=(0,),
@@ -208,7 +209,8 @@ if __name__ == "__main__":
                     state,
                     batch,
                     diffusion_step_key,
-                    diffusion
+                    diffusion,
+                    ivon_config['train_mc_samples']
                 )
 
                 if (step + 1) % num_steps_per_epoch == 0:

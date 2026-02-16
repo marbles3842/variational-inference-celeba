@@ -111,6 +111,7 @@ def diffusion_train_step_with_ivon(
     batch: jax.Array,
     train_key: jr.PRNGKey,
     schedule: DiffusionModelSchedule,
+    mc_steps: int
 ):
     """
     Training step with MC sampling for IVON
@@ -130,7 +131,7 @@ def diffusion_train_step_with_ivon(
 
     train_key, main_key, key_t, key_eps = jr.split(train_key, num=4)
 
-    grad_fn = make_monte_carlo_grad(loss_fn=loss, num_samples=1)
+    grad_fn = make_monte_carlo_grad(loss_fn=loss, num_samples=mc_steps)
     loss, grads, opt_state = grad_fn(
         key=main_key,
         params=state.params,

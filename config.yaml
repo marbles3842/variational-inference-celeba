@@ -1,12 +1,12 @@
 ivon:
-  learning_rate: 0.2
-  num_epochs: 100
-  batch_size: 128
+  learning_rate: 0.3
+  num_epochs: 400
+  batch_size: 512
   weight_decay: 1.0e-5
   clip_radius: 1.0e-3
   ess: 608000.0
   hess_init: 0.5
   diffusion_timesteps: 1000
-  train_mc_samples: 3
+  train_mc_samples: 16
   rescale_lr: True
   semantic_likelihood_noise: 0.001
