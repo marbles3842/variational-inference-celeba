@@ -49,18 +49,12 @@ def create_mgpu_diffusion_train_step(mesh):
             state_sharding,
             get_data_sharding(mesh),
             replicated_sharding,
-            replicated_sharding,
             replicated_sharding
         ),
         out_shardings=(state_sharding, replicated_sharding),
         donate_argnums=(0,),
+        static_argnums=(4,)
     )
-
-
-# def fast_forward_iterator(iterator, n_steps):
-#     if n_steps > 0:
-#         print(f"Fast-forwarding dataset by {n_steps} steps...")
-#         next(itertools.islice(iterator, n_steps, n_steps), None)
 
 
 if __name__ == "__main__":
@@ -194,7 +188,7 @@ if __name__ == "__main__":
 
                 state = ckptr.load_pytree(abstract_pytree=state)
                 latest_step = latest_info.step
-                # fast_forward_iterator(images, latest_step)
+         
             else:
                 latest_step = 0
                 print("No checkpoint found. Starting from scratch.")
