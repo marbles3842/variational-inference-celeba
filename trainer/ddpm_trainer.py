@@ -105,7 +105,7 @@ def _compute_hessian_metrics(hessian):
     return jnp.mean(all_hess_values), jnp.min(all_hess_values)
 
 
-@jax.jit
+@jax.jit(static_argnums=(4,))
 def diffusion_train_step_with_ivon(
     state: TrainState,
     batch: jax.Array,
