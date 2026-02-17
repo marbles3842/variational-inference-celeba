@@ -17,7 +17,7 @@ class IvonState(NamedTuple):
     beta1: float
     beta2: float
     ess: float
-    avg_nxg: optax.Updates
+    avg_scaled_grad_noise: optax.Updates # g * eps * variance. Used to udpate the Hessian
     momentum: optax.Updates
     hessian: optax.Updates
 
@@ -39,22 +39,22 @@ def make_monte_carlo_grad(loss_fn: Callable, num_samples: int):
         noise = _sample_normal_like(key=key, target_tree=mean)
         theta = tree_map(lambda m, s, eps: m + s * eps, mean, std, noise)
         loss, grad = jax.value_and_grad(loss_fn)(theta, data)
-        nxg = tree_map(lambda g, s, eps: g * s * eps, grad, std, noise)
-        return loss, grad, nxg
+        scaled_grad_noise = tree_map(lambda g, s, eps: g * s * eps, grad, std, noise)
+        return loss, grad, scaled_grad_noise
 
     def grad_fn(key: jr.PRNGKey, params: optax.Params, opt_state: IvonState, data):
         keys = jr.split(key, num_samples)
 
         variance = _compute_variance(opt_state)
 
-        losses, grads, nxgs = vmap(_single_sample, in_axes=(0, None, None, None))(
+        losses, grads, scaled_grad_noises = vmap(_single_sample, in_axes=(0, None, None, None))(
             keys, params, variance, data
         )
 
         avg_grad = tree_map(lambda g: jnp.mean(g, axis=0), grads)
-        avg_nxg = tree_map(lambda n: jnp.mean(n, axis=0), nxgs)
+        avg_scaled_grad_noise = tree_map(lambda n: jnp.mean(n, axis=0), scaled_grad_noises)
 
-        return jnp.mean(losses), avg_grad, opt_state._replace(avg_nxg=avg_nxg)
+        return jnp.mean(losses), avg_grad, opt_state._replace(avg_scaled_grad_noise=avg_scaled_grad_noise)
 
     return grad_fn
 
@@ -129,7 +129,7 @@ def _init_ivon(
         beta1=beta1,
         beta2=beta2,
         ess=ess,
-        avg_nxg=tree_map(jnp.zeros_like, params),
+        avg_scaled_grad_noise=tree_map(jnp.zeros_like, params),
         momentum=momentum,
         hessian=hessian
     )
@@ -149,7 +149,7 @@ def _update_hessian(state: IvonState) -> IvonState:
     ess = state.ess
 
     nll_hess = tree_map(
-        lambda nxg, h: ess * nxg * (h + weight_decay), state.avg_nxg, state.hessian
+        lambda sgn, h: ess * sgn * (h + weight_decay), state.avg_scaled_grad_noise, state.hessian
     )
 
     new_hessian = tree_map(
