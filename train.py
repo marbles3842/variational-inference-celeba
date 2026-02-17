@@ -1,4 +1,3 @@
-import itertools
 import jax
 import jax.numpy as jnp
 import jax.random as jr
@@ -16,7 +15,6 @@ from trainer.diffusion_train_state import create_train_state
 from logger.metrics_logger import MetricsLogger
 
 from core.ivon import ivon
-from core.serialization import save_params
 
 from utils import load_diffusion_ivon_config
 
@@ -42,13 +40,15 @@ def create_mgpu_diffusion_train_step(mesh):
     replicated_sharding = NamedSharding(mesh, P())
 
     state_sharding = NamedSharding(mesh, P())
+    
+    sharded_key_sharding = NamedSharding(mesh, P("data"))
 
     return jax.jit(
         diffusion_train_step_with_ivon,
         in_shardings=(
             state_sharding,
             get_data_sharding(mesh),
-            replicated_sharding,
+            sharded_key_sharding,
             replicated_sharding
         ),
         out_shardings=(state_sharding, replicated_sharding),
@@ -194,15 +194,21 @@ if __name__ == "__main__":
                 print("No checkpoint found. Starting from scratch.")
 
             print(f"Latest step: {latest_step}")
+            
+            key_sharding = NamedSharding(mesh, P("data"))
 
             for step, batch in enumerate(images, start=latest_step + 1):
                 batch = jax.device_put(batch, get_data_sharding(mesh))
 
                 main_mc_rng, step_mc_rng = jr.split(main_mc_rng)
+                
+                step_mc_rng_batch = jr.split(step_mc_rng, num_devices)
+                step_mc_rng_sharded = jax.device_put(step_mc_rng_batch, key_sharding)
+                
                 state, diffusion_step_key = mgpu_diffusion_train_step(
                     state,
                     batch,
-                    diffusion_step_key,
+                    step_mc_rng_sharded,
                     diffusion,
                     ivon_config['train_mc_samples']
                 )
@@ -222,5 +228,5 @@ if __name__ == "__main__":
 
                     logger.end_epoch()
 
-    save_params(f"ddpm-ivon-{args.init_seed}.msgpack", state.params)
-    save_params(f"ddpm-ivon-state-{args.init_seed}.msgpack", state.opt_state[0])
+    
+    print('Training completed!')
