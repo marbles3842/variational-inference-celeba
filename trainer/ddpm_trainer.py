@@ -10,7 +10,7 @@ from flax.core import FrozenDict
 from flax.struct import dataclass, field
 from flax.training.train_state import TrainState
 
-from core.ivon import make_monte_carlo_grad
+from core.ivon import make_monte_carlo_grad, IvonState, _sample_normal_like
 
 
 Dtype = Any
@@ -117,7 +117,7 @@ def diffusion_train_step_with_ivon(
     Training step with MC sampling for IVON
     Implements algorithm 1 from https://arxiv.org/pdf/2006.11239
     """
-
+    
     def loss(params, data):
         batch, key_t, key_eps = data
         return _negative_elbo(
@@ -180,6 +180,79 @@ def diffusion_sample(
         )
 
         predicted_noise = model.apply(variables, x_t, t_arr)
+
+        alpha_t = schedule.alpha[t]
+        alpha_t_bar = schedule.alpha_cumprod[t]
+        beta_t = schedule.beta[t]
+
+        x_t = (
+            1
+            / jnp.sqrt(alpha_t)
+            * (x_t - predicted_noise * (1 - alpha_t) / jnp.sqrt(1 - alpha_t_bar))
+        )
+
+        sigma_t = jnp.sqrt(beta_t)
+        x_t = x_t + sigma_t * z
+        return (x_t, key), None
+
+    (x_t, key), _ = scan(
+        reverse_step, (x_t, key), jnp.arange(schedule.timesteps - 1, -1, -1)
+    )
+
+    return x_t
+
+
+def diffusion_sample_bma(
+    model: nn.Module,
+    mean_params: FrozenDict,
+    ivon_state: IvonState,
+    shape: Tuple,
+    key: jr.PRNGKey,
+    schedule: DiffusionModelSchedule,
+    num_mc_samples: int = 4,
+    dtype: Dtype = jnp.float32,
+):
+    """Sample with Bayesian Model Averaging over IVON weight posterior.
+
+    Instead of a single forward pass with mean_params, draws num_mc_samples
+    weight perturbations from the IVON posterior and averages noise predictions.
+    """
+    batch_size = shape[0]
+    ess = ivon_state.ess
+    weight_decay = ivon_state.weight_decay
+
+    std = jax.tree.map(
+        lambda h: jax.lax.rsqrt(ess * (h + weight_decay)), ivon_state.hessian
+    )
+
+    key, subkey = jr.split(key)
+    x_t = jr.normal(key=subkey, shape=shape, dtype=dtype)
+
+    def reverse_step(carry, t):
+        x_t, key = carry
+
+        t_arr = jnp.full((batch_size,), t, dtype=dtype)
+        key, subkey, noise_key = jr.split(key, 3)
+
+        z = cond(
+            t > 0,
+            lambda _: jr.normal(key=subkey, shape=shape, dtype=dtype),
+            lambda _: jnp.zeros(shape, dtype=dtype),
+            None,
+        )
+
+        # Average noise predictions over MC weight samples
+        mc_keys = jr.split(noise_key, num_mc_samples)
+
+        def predict_with_sample(mc_key):
+            noise = _sample_normal_like(key=mc_key, target_tree=mean_params)
+            sampled_params = jax.tree.map(
+                lambda m, s, eps: m + s * eps, mean_params, std, noise
+            )
+            return model.apply({"params": sampled_params}, x_t, t_arr)
+
+        all_predictions = jax.vmap(predict_with_sample)(mc_keys)
+        predicted_noise = jnp.mean(all_predictions, axis=0)
 
         alpha_t = schedule.alpha[t]
         alpha_t_bar = schedule.alpha_cumprod[t]

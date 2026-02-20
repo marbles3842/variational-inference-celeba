@@ -4,7 +4,7 @@ from jax.lax import map
 import jax.random as jr
 import jax.numpy as jnp
 
-from trainer.ddpm_trainer import DiffusionModelSchedule, diffusion_sample
+from trainer.ddpm_trainer import DiffusionModelSchedule, diffusion_sample, diffusion_sample_bma
 
 from model.unet import Unet_CelebA
 from data_loader.celeba import CelebAInfo
@@ -84,12 +84,25 @@ if __name__ == "__main__":
 
     diffusion = DiffusionModelSchedule.create(timesteps=config["diffusion_timesteps"])
 
-    samples = diffusion_sample(
-        model=unet,
-        key=jr.key(1),
-        variables={"params": mean_params},
-        shape=(32, *CelebAInfo.shape),
-        schedule=diffusion,
-    )
+    output_path = os.path.join(args.samples_output_dir, "celeba_samples.npy")
 
-    jnp.save("celeba_samples.npy", samples)
+    if args.mc_samples > 0:
+        samples = diffusion_sample_bma(
+            model=unet,
+            mean_params=mean_params,
+            ivon_state=ivon_state,
+            shape=(args.batch_size, *CelebAInfo.shape),
+            key=jr.key(args.samples_seed),
+            schedule=diffusion,
+            num_mc_samples=args.mc_samples,
+        )
+    else:
+        samples = diffusion_sample(
+            model=unet,
+            key=jr.key(args.samples_seed),
+            variables={"params": mean_params},
+            shape=(args.batch_size, *CelebAInfo.shape),
+            schedule=diffusion,
+        )
+
+    jnp.save(output_path, samples)
