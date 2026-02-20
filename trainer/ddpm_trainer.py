@@ -200,3 +200,57 @@ def diffusion_sample(
     )
 
     return x_t
+
+
+def ddim_sample(
+    model: nn.Module,
+    variables: FrozenDict,
+    shape: Tuple,
+    schedule: DiffusionModelSchedule,
+    steps: int = 50,
+    dtype: Dtype = jnp.float32,
+    key: jr.PRNGKey = None,
+):
+    """
+    DDIM sampling (Song et al. 2020, https://arxiv.org/abs/2010.02502).
+    Deterministic reverse process that allows skipping timesteps.
+
+    Args:
+        steps: Number of reverse steps (e.g. 50 instead of 1000).
+        key: PRNG key used only for the initial noise.
+    """
+    if key is None:
+        key = jr.key(0)
+
+    batch_size = shape[0]
+    x_t = jr.normal(key=key, shape=shape, dtype=dtype)
+
+    # Evenly spaced subsequence of timesteps: [T, ..., 0]
+    timesteps = jnp.linspace(0, schedule.timesteps - 1, steps + 1, dtype=dtype)
+    timesteps = jnp.rint(timesteps).astype(jnp.int32)[::-1]  # descending
+
+    # Stack (t, t_next) pairs for scan: shape (steps, 2)
+    t_pairs = jnp.stack([timesteps[:-1], timesteps[1:]], axis=1)
+
+    def reverse_step(x_t, t_pair):
+        t = t_pair[0]
+        t_next = t_pair[1]
+
+        t_arr = jnp.full((batch_size,), t, dtype=dtype)
+        predicted_noise = model.apply(variables, x_t, t_arr)
+
+        alpha_t = schedule.alpha_cumprod[t]
+        alpha_t_next = schedule.alpha_cumprod[t_next]
+
+        # Predict x_0 from x_t
+        x_0 = (x_t - jnp.sqrt(1 - alpha_t) * predicted_noise) / jnp.sqrt(alpha_t)
+        # Direction pointing to x_t
+        x_t_direction = jnp.sqrt(1 - alpha_t_next) * predicted_noise
+        # Combine
+        x_t = jnp.sqrt(alpha_t_next) * x_0 + x_t_direction
+
+        return x_t, None
+
+    x_t, _ = scan(reverse_step, x_t, t_pairs)
+
+    return x_t

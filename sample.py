@@ -4,7 +4,7 @@ from jax.lax import map
 import jax.random as jr
 import jax.numpy as jnp
 
-from trainer.ddpm_trainer import DiffusionModelSchedule, diffusion_sample
+from trainer.ddpm_trainer import DiffusionModelSchedule, diffusion_sample, ddim_sample
 
 from model.unet import Unet_CelebA
 from data_loader.celeba import CelebAInfo
@@ -69,6 +69,21 @@ if __name__ == "__main__":
         help="A dir for the samples output",
     )
 
+    parser.add_argument(
+        "--sampler",
+        type=str,
+        choices=["ddpm", "ddim"],
+        default="ddim",
+        help="Sampling method: ddpm (1000 steps) or ddim (fast, fewer steps)",
+    )
+
+    parser.add_argument(
+        "--ddim-steps",
+        type=int,
+        default=50,
+        help="Number of reverse steps for DDIM sampling (default: 50)",
+    )
+
     args = parser.parse_args()
 
     config = load_diffusion_ivon_config()
@@ -84,12 +99,22 @@ if __name__ == "__main__":
 
     diffusion = DiffusionModelSchedule.create(timesteps=config["diffusion_timesteps"])
 
-    samples = diffusion_sample(
-        model=unet,
-        key=jr.key(1),
-        variables={"params": mean_params},
-        shape=(32, *CelebAInfo.shape),
-        schedule=diffusion,
-    )
+    if args.sampler == "ddim":
+        samples = ddim_sample(
+            model=unet,
+            variables={"params": mean_params},
+            shape=(32, *CelebAInfo.shape),
+            schedule=diffusion,
+            steps=args.ddim_steps,
+            key=jr.key(args.samples_seed),
+        )
+    else:
+        samples = diffusion_sample(
+            model=unet,
+            key=jr.key(args.samples_seed),
+            variables={"params": mean_params},
+            shape=(32, *CelebAInfo.shape),
+            schedule=diffusion,
+        )
 
     jnp.save("celeba_samples.npy", samples)
