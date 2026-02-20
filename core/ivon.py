@@ -187,3 +187,12 @@ def _compute_variance(state: IvonState) -> optax.Updates:
     return tree_map(
         lambda h: rsqrt(state.ess * (h + state.weight_decay)), state.hessian
     )
+
+
+def sample_parameters(key: jr.PRNGKey, params: optax.Params, opt_state: tuple):
+    ivon_state = opt_state[0]
+    variance = _compute_variance(ivon_state)
+    noise = _sample_normal_like(key=key, target_tree=params)
+    sampled_params = tree_map(lambda m, s, eps: m + s * eps, params, variance, noise)
+    return sampled_params, variance
+
