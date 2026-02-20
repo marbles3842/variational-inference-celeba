@@ -7,3 +7,7 @@ pyyaml
 datasets
 Pillow
 grain
+torch
+numpy
+torchvision
+facenet-pytorch
