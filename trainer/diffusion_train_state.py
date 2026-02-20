@@ -32,11 +32,12 @@ def create_train_state(
 ):
     variables = model.init(rng, x0, t0)
     params = variables["params"]
+    ema_params = jax.tree.map(jax.numpy.copy, params)
     return TrainState.create(
         apply_fn=model.apply,
         params=params,
         tx=optimizer,
         metrics=Metrics.empty(),
-        ema_params=params,
+        ema_params=ema_params,
         ema_step_size=ema_step_size,
     )
