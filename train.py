@@ -154,6 +154,7 @@ if __name__ == "__main__":
         jnp.zeros((1, *CelebAInfo.shape)),
         jnp.zeros((1,)),
         tx,
+        ema_step_size=ivon_config.get("ema_step_size", 0.001),
     )
 
     state_sharding_tree = jax.tree_util.tree_map(get_sharding_for_leaf, state)
@@ -224,4 +225,5 @@ if __name__ == "__main__":
                     logger.end_epoch()
 
     save_params(f"ddpm-ivon-{args.init_seed}.msgpack", state.params)
+    save_params(f"ddpm-ivon-ema-{args.init_seed}.msgpack", state.ema_params)
     save_params(f"ddpm-ivon-state-{args.init_seed}.msgpack", state.opt_state[0])

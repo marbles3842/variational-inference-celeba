@@ -94,6 +94,7 @@ def diffusion_train_step(
 
     loss, grads = jax.value_and_grad(loss)(state.params, key_t, key_eps)
     new_state = state.apply_gradients(grads=grads)
+    new_state = new_state.apply_ema()
     metric_update = new_state.metrics.single_from_model_output(loss=loss)
     metrics = new_state.metrics.merge(metric_update)
     return new_state.replace(metrics=metrics), key
@@ -143,6 +144,7 @@ def diffusion_train_step_with_ivon(
     updates, opt_state = state.tx.update(grads, full_opt_state, state.params)
     new_params = optax.apply_updates(state.params, updates)
     new_state = state.replace(params=new_params, opt_state=opt_state)
+    new_state = new_state.apply_ema()
 
     hess_mean, hess_min = _compute_hessian_metrics(opt_state[0].hessian)
     metric_update = new_state.metrics.single_from_model_output(
